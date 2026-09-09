@@ -3,15 +3,15 @@ WORKDIR /app
 
 RUN apk add --no-cache python3 make g++ openssl
 
-ARG DATABASE_URL
-ENV DATABASE_URL=$DATABASE_URL
-
 COPY package.json ./
 COPY prisma ./prisma
-RUN npm install
+# prisma generate reads the schema but does not connect to the DB
+# Use a dummy URL so postinstall succeeds without real credentials
+RUN DATABASE_URL="postgresql://build:build@localhost:5432/build" npm install
 
 COPY . .
-RUN npx prisma generate && npm run build
+RUN DATABASE_URL="postgresql://build:build@localhost:5432/build" npx prisma generate && \
+    DATABASE_URL="postgresql://build:build@localhost:5432/build" npx tsc --project tsconfig.build.json
 
 # ── Production image ──────────────────────────────────────────────────────────
 FROM node:22-alpine AS runner
@@ -19,21 +19,19 @@ WORKDIR /app
 
 RUN apk add --no-cache openssl wget
 
-ARG DATABASE_URL
-ENV DATABASE_URL=$DATABASE_URL
 ENV NODE_ENV=production
 
 COPY package.json ./
 COPY prisma ./prisma
-RUN npm install --omit=dev && npx prisma generate
+# Same dummy URL for generate — real DATABASE_URL is injected at runtime by the platform
+RUN DATABASE_URL="postgresql://build:build@localhost:5432/build" npm install --omit=dev
 
 COPY --from=builder /app/dist ./dist
 
-# Nimbuz (and most platforms) inject $PORT — the API picks it up via process.env.PORT
 EXPOSE 3100
 
-# Health check on whichever port the platform assigns
 HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 \
   CMD wget -qO- "http://localhost:${PORT:-3100}/health" | grep -q '"ok"' || exit 1
 
+# DATABASE_URL must be set as a runtime environment variable in your deployment platform
 CMD ["sh", "-c", "npx prisma migrate deploy && node dist/src/index.js"]
