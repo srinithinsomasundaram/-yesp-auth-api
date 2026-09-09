@@ -501,3 +501,291 @@ model LoginAttempt {
   @@index([ipAddress, occurredAt])
   @@map("login_attempts")
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// YESP HIREFLOW — Hiring Management Platform
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// ─── HireFlow: Pipelines ──────────────────────────────────────────────────────
+
+model HfPipeline {
+  id             String   @id @default(uuid())
+  organizationId String   @map("organization_id")
+  name           String
+  description    String?
+  isTemplate     Boolean  @default(false) @map("is_template")
+  isActive       Boolean  @default(true)  @map("is_active")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt      @map("updated_at")
+
+  stages       HfPipelineStage[]
+  jobs         HfJob[]
+  applications HfApplication[]
+
+  @@index([organizationId])
+  @@map("hf_pipelines")
+}
+
+model HfPipelineStage {
+  id             String   @id @default(uuid())
+  organizationId String   @map("organization_id")
+  pipelineId     String   @map("pipeline_id")
+  name           String
+  stageKey       String   @map("stage_key")
+  position       Int
+  isTerminal     Boolean  @default(false) @map("is_terminal")
+  terminalType   String?  @map("terminal_type")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt      @map("updated_at")
+
+  pipeline         HfPipeline                  @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
+  applications     HfApplication[]             @relation("CurrentStage")
+  stageHistoryFrom HfApplicationStageHistory[] @relation("FromStage")
+  stageHistoryTo   HfApplicationStageHistory[] @relation("ToStage")
+
+  @@unique([pipelineId, stageKey])
+  @@unique([pipelineId, position])
+  @@index([pipelineId])
+  @@map("hf_pipeline_stages")
+}
+
+// ─── HireFlow: Jobs ───────────────────────────────────────────────────────────
+
+model HfJob {
+  id                  String    @id @default(uuid())
+  organizationId      String    @map("organization_id")
+  pipelineId          String?   @map("pipeline_id")
+  title               String
+  department          String?
+  location            String?
+  employmentType      String?   @map("employment_type")
+  workMode            String?   @map("work_mode")
+  hiringManagerUserId String?   @map("hiring_manager_user_id")
+  recruiterUserId     String?   @map("recruiter_user_id")
+  openPositions       Int       @default(1)     @map("open_positions")
+  status              String    @default("draft")
+  description         String?
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt      @map("updated_at")
+  deletedAt           DateTime? @map("deleted_at")
+
+  pipeline     HfPipeline?    @relation(fields: [pipelineId], references: [id])
+  applications HfApplication[]
+  tasks        HfTask[]
+
+  @@index([organizationId])
+  @@index([organizationId, status])
+  @@map("hf_jobs")
+}
+
+// ─── HireFlow: Candidates ─────────────────────────────────────────────────────
+
+model HfCandidate {
+  id                   String    @id @default(uuid())
+  organizationId       String    @map("organization_id")
+  firstName            String    @map("first_name")
+  lastName             String?   @map("last_name")
+  email                String?
+  phone                String?
+  headline             String?
+  location             String?
+  currentCompany       String?   @map("current_company")
+  currentTitle         String?   @map("current_title")
+  totalExperienceYears Decimal?  @map("total_experience_years")
+  summary              String?
+  source               String?
+  linkedinUrl          String?   @map("linkedin_url")
+  portfolioUrl         String?   @map("portfolio_url")
+  notes                String?
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @updatedAt      @map("updated_at")
+  deletedAt            DateTime? @map("deleted_at")
+
+  applications   HfApplication[]
+  documents      HfCandidateDocument[]
+  tagAssignments HfCandidateTagAssignment[]
+  tasks          HfTask[]
+
+  @@index([organizationId])
+  @@index([organizationId, email])
+  @@map("hf_candidates")
+}
+
+model HfCandidateDocument {
+  id             String   @id @default(uuid())
+  organizationId String   @map("organization_id")
+  candidateId    String   @map("candidate_id")
+  documentType   String   @map("document_type")
+  fileName       String   @map("file_name")
+  storageKey     String   @map("storage_key")
+  mimeType       String?  @map("mime_type")
+  fileSize       BigInt?   @map("file_size")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  deletedAt      DateTime? @map("deleted_at")
+
+  candidate HfCandidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+
+  @@index([candidateId])
+  @@map("hf_candidate_documents")
+}
+
+model HfCandidateTag {
+  id             String   @id @default(uuid())
+  organizationId String   @map("organization_id")
+  name           String
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  assignments HfCandidateTagAssignment[]
+
+  @@unique([organizationId, name])
+  @@map("hf_candidate_tags")
+}
+
+model HfCandidateTagAssignment {
+  candidateId String @map("candidate_id")
+  tagId       String @map("tag_id")
+
+  candidate HfCandidate    @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  tag       HfCandidateTag @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([candidateId, tagId])
+  @@map("hf_candidate_tag_assignments")
+}
+
+// ─── HireFlow: Applications ───────────────────────────────────────────────────
+
+model HfApplication {
+  id              String    @id @default(uuid())
+  organizationId  String    @map("organization_id")
+  jobId           String    @map("job_id")
+  candidateId     String    @map("candidate_id")
+  pipelineId      String?   @map("pipeline_id")
+  currentStageId  String?   @map("current_stage_id")
+  status          String    @default("active")
+  appliedAt       DateTime  @default(now()) @map("applied_at")
+  coverNote       String?   @map("cover_note")
+  source          String?
+  rejectionReason String?   @map("rejection_reason")
+  rejectedAt      DateTime? @map("rejected_at")
+  hiredAt         DateTime? @map("hired_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt      @map("updated_at")
+  deletedAt       DateTime? @map("deleted_at")
+
+  job          HfJob                       @relation(fields: [jobId], references: [id])
+  candidate    HfCandidate                 @relation(fields: [candidateId], references: [id])
+  pipeline     HfPipeline?                 @relation(fields: [pipelineId], references: [id])
+  currentStage HfPipelineStage?            @relation("CurrentStage", fields: [currentStageId], references: [id])
+  stageHistory HfApplicationStageHistory[]
+  activities   HfApplicationActivity[]
+  interviews   HfInterview[]
+  tasks        HfTask[]
+
+  @@index([organizationId])
+  @@index([jobId])
+  @@index([candidateId])
+  @@index([currentStageId])
+  @@map("hf_applications")
+}
+
+model HfApplicationStageHistory {
+  id              String   @id @default(uuid())
+  organizationId  String   @map("organization_id")
+  applicationId   String   @map("application_id")
+  fromStageId     String?  @map("from_stage_id")
+  toStageId       String   @map("to_stage_id")
+  changedByUserId String?  @map("changed_by_user_id")
+  reason          String?
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  application HfApplication    @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  fromStage   HfPipelineStage? @relation("FromStage", fields: [fromStageId], references: [id])
+  toStage     HfPipelineStage  @relation("ToStage",   fields: [toStageId],   references: [id])
+
+  @@index([applicationId])
+  @@map("hf_application_stage_history")
+}
+
+model HfApplicationActivity {
+  id             String   @id @default(uuid())
+  organizationId String   @map("organization_id")
+  applicationId  String   @map("application_id")
+  activityType   String   @map("activity_type")
+  actorUserId    String?  @map("actor_user_id")
+  metadata       Json     @default("{}")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  application HfApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  @@index([applicationId])
+  @@map("hf_application_activities")
+}
+
+// ─── HireFlow: Interviews ─────────────────────────────────────────────────────
+
+model HfInterview {
+  id             String    @id @default(uuid())
+  organizationId String    @map("organization_id")
+  applicationId  String    @map("application_id")
+  title          String
+  scheduledStart DateTime? @map("scheduled_start")
+  scheduledEnd   DateTime? @map("scheduled_end")
+  timezone       String?
+  meetingUrl     String?   @map("meeting_url")
+  location       String?
+  status         String    @default("scheduled")
+  completedAt    DateTime? @map("completed_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt      @map("updated_at")
+
+  application  HfApplication            @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  participants HfInterviewParticipant[]
+
+  @@index([applicationId])
+  @@index([organizationId, scheduledStart])
+  @@map("hf_interviews")
+}
+
+model HfInterviewParticipant {
+  id               String   @id @default(uuid())
+  interviewId      String   @map("interview_id")
+  userId           String   @map("user_id")
+  participantType  String   @map("participant_type")
+  feedbackRequired Boolean  @default(true) @map("feedback_required")
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  interview HfInterview @relation(fields: [interviewId], references: [id], onDelete: Cascade)
+
+  @@unique([interviewId, userId])
+  @@map("hf_interview_participants")
+}
+
+// ─── HireFlow: Tasks ──────────────────────────────────────────────────────────
+
+model HfTask {
+  id               String    @id @default(uuid())
+  organizationId   String    @map("organization_id")
+  applicationId    String?   @map("application_id")
+  candidateId      String?   @map("candidate_id")
+  jobId            String?   @map("job_id")
+  taskType         String    @map("task_type")
+  title            String
+  description      String?
+  status           String    @default("pending")
+  priority         String    @default("normal")
+  assignedToUserId String?   @map("assigned_to_user_id")
+  dueAt            DateTime? @map("due_at")
+  completedAt      DateTime? @map("completed_at")
+  sourceEvent      String?   @map("source_event")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt      @map("updated_at")
+
+  application HfApplication? @relation(fields: [applicationId], references: [id])
+  candidate   HfCandidate?   @relation(fields: [candidateId], references: [id])
+  job         HfJob?         @relation(fields: [jobId], references: [id])
+
+  @@index([organizationId, status])
+  @@index([assignedToUserId, status])
+  @@index([organizationId, dueAt])
+  @@map("hf_tasks")
+}

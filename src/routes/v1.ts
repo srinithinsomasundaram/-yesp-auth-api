@@ -24,6 +24,9 @@ import { auditRouter }         from "../modules/shared/audit/audit.routes.js";
 // ── Admin ─────────────────────────────────────────────────────────────────────
 import { adminRouter }         from "../modules/admin/admin.routes.js";
 
+// ── HireFlow ──────────────────────────────────────────────────────────────────
+import { hireflowRouter }      from "../../hireflow/hireflow.router.js";
+
 const v1 = new Hono();
 
 // Yesp Identity
@@ -49,5 +52,8 @@ v1.route("/", auditRouter);
 
 // Admin
 v1.route("/", adminRouter);
+
+// HireFlow
+v1.route("/hireflow", hireflowRouter);
 
 export { v1 };
