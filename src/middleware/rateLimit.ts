@@ -71,10 +71,10 @@ export const authCheckLimit = rateLimit({
   windowSec: 60,
 });
 
-/** /auth/password/login — 10 per 15 min per IP */
+/** /auth/password/login — 20 per 15 min per IP */
 export const loginRateLimit = rateLimit({
   key: (c) => `rl:login:${getIp(c)}`,
-  max: 10,
+  max: 20,
   windowSec: 900,
 });
 
