@@ -1,11 +1,12 @@
 import { zValidator } from "@hono/zod-validator";
 import { createRouter } from "../../src/lib/hono.js";
 import { z } from "zod";
+import argon2 from "argon2";
 import { authenticator } from "otplib";
 import { requireAuth } from "../../src/middleware/auth.js";
 import { mfaChallengeLimit, recoveryCodeLimit } from "../../src/middleware/rateLimit.js";
 import { db } from "../../src/db/client.js";
-import { generateToken, hashToken } from "../../src/lib/crypto.js";
+import { generateToken } from "../../src/lib/crypto.js";
 import { audit } from "../../src/lib/audit.js";
 
 const router = createRouter();
@@ -58,19 +59,16 @@ router.post("/mfa/totp/verify", requireAuth, zValidator("json", totpVerifySchema
   const valid = authenticator.verify({ token: code, secret: method.secretReference });
   if (!valid) return c.json({ error: "invalid_code" }, 400);
 
-  // Generate recovery codes
+  // Generate recovery codes — hashed with argon2id (not SHA-256) so they're
+  // resistant to offline attacks if the DB is ever compromised
   const codes = Array.from({ length: 10 }, () => generateToken(12));
+  const codeHashes = await Promise.all(codes.map((c) => argon2.hash(c, { type: argon2.argon2id })));
 
-  await db.$transaction([
-    db.mfaMethod.update({
-      where: { id: methodId },
-      data: { status: "active", verifiedAt: new Date() },
-    }),
-    db.recoveryCode.deleteMany({ where: { mfaMethodId: methodId } }),
-    db.recoveryCode.createMany({
-      data: codes.map((code) => ({ mfaMethodId: methodId, codeHash: hashToken(code) })),
-    }),
-  ]);
+  await db.mfaMethod.update({ where: { id: methodId }, data: { status: "active", verifiedAt: new Date() } });
+  await db.recoveryCode.deleteMany({ where: { mfaMethodId: methodId } });
+  for (const hash of codeHashes) {
+    await db.recoveryCode.create({ data: { mfaMethodId: methodId, codeHash: hash } });
+  }
 
   await audit({
     eventType: "mfa.enabled",
@@ -111,11 +109,19 @@ const recoverySchema = z.object({ userId: z.string(), code: z.string() });
 
 router.post("/mfa/recovery", recoveryCodeLimit, zValidator("json", recoverySchema), async (c) => {
   const { userId, code } = c.req.valid("json");
-  const codeHash = hashToken(code);
 
-  const recovery = await db.recoveryCode.findFirst({
-    where: { codeHash, usedAt: null, mfaMethod: { userId } },
+  // Fetch unused codes for this user and verify with argon2 (constant-time)
+  const candidates = await db.recoveryCode.findMany({
+    where: { usedAt: null, mfaMethod: { userId } },
   });
+
+  let recovery: typeof candidates[0] | null = null;
+  for (const candidate of candidates) {
+    if (await argon2.verify(candidate.codeHash, code)) {
+      recovery = candidate;
+      break;
+    }
+  }
 
   if (!recovery) return c.json({ error: "invalid_recovery_code" }, 401);
 

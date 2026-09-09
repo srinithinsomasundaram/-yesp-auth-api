@@ -6,7 +6,7 @@ import { createRouter } from "../../src/lib/hono.js";
 import { db } from "../../src/db/client.js";
 import { hashPassword, verifyPassword, isStrongPassword } from "../../src/lib/password.js";
 import { generateToken, hashToken } from "../../src/lib/crypto.js";
-import { signAccessToken, signIdToken } from "../../src/lib/tokens.js";
+import { signAccessToken, signIdToken, getJwks } from "../../src/lib/tokens.js";
 import { audit } from "../../src/lib/audit.js";
 import {
   loginRateLimit,
@@ -32,6 +32,14 @@ function setRefreshCookie(c: Parameters<typeof setCookie>[0], token: string, max
     path: "/",
     maxAge,
     secure: env.NODE_ENV === "production",
+    ...(env.COOKIE_DOMAIN ? { domain: env.COOKIE_DOMAIN } : {}),
+  });
+}
+
+function clearRefreshCookie(c: Parameters<typeof deleteCookie>[0]) {
+  deleteCookie(c, "yesp_rt", {
+    path: "/",
+    ...(env.COOKIE_DOMAIN ? { domain: env.COOKIE_DOMAIN } : {}),
   });
 }
 
@@ -83,7 +91,9 @@ router.post("/auth/register", registerLimit, zValidator("json", registerSchema),
     },
   });
 
-  await sendVerificationEmail(user.email, token).catch(() => {});
+  await sendVerificationEmail(user.email, token).catch((err) => {
+    console.error("[Email] Failed to send verification email:", err);
+  });
 
   await audit({
     eventType: "user.registered",
@@ -143,16 +153,19 @@ router.post("/auth/password/login", loginRateLimit, zValidator("json", loginSche
   const ip = c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
   const userAgent = c.req.header("user-agent") ?? undefined;
 
+  // Pseudonymize the email in audit/rate-limit records to avoid storing raw PII
+  const emailHash = hashToken(body.email.toLowerCase());
+
   const recordAttempt = (success: boolean, userId?: string) =>
     db.loginAttempt.create({
-      data: { identifier: body.email, ipAddress: ip, success },
+      data: { identifier: emailHash, ipAddress: ip, success },
     }).then(() =>
       audit({
         eventType: success ? "user.login.success" : "user.login.failed",
         actorUserId: userId,
         ipAddress: ip,
         userAgent,
-        metadata: { email: body.email },
+        metadata: { emailHash },
       })
     );
 
@@ -164,6 +177,12 @@ router.post("/auth/password/login", loginRateLimit, zValidator("json", loginSche
   if (!user || user.status !== "active" || !user.credentials[0]?.passwordHash) {
     await recordAttempt(false);
     return c.json({ error: "invalid_credentials" }, 401);
+  }
+
+  // Enforce email verification in production
+  if (env.NODE_ENV === "production" && !user.emailVerified) {
+    await recordAttempt(false, user.id);
+    return c.json({ error: "email_not_verified" }, 403);
   }
 
   const valid = await verifyPassword(user.credentials[0].passwordHash, body.password);
@@ -253,20 +272,29 @@ router.post("/auth/token/refresh", tokenRefreshLimit, async (c) => {
     include: { session: true, user: true },
   });
 
+  if (!record) {
+    return c.json({ error: "invalid_refresh_token" }, 401);
+  }
+
+  // Enforce absolute max session age regardless of refresh activity
+  const sessionCreatedAt = record.session.createdAt ?? record.session.expiresAt;
+  const sessionAge = Math.floor((Date.now() - new Date(sessionCreatedAt).getTime()) / 1000);
+
   if (
-    !record ||
     record.usedAt ||
     record.revokedAt ||
     record.expiresAt < new Date() ||
     record.session.revokedAt ||
-    record.user.status !== "active"
+    record.user.status !== "active" ||
+    sessionAge > env.SESSION_MAX_AGE_TTL
   ) {
-    // Possible reuse — revoke the session family
-    if (record?.sessionId) {
+    // Possible token reuse — revoke the whole session family as a security measure
+    if (record != null && record.sessionId) {
       await db.session.update({
         where: { id: record.sessionId },
         data: { revokedAt: new Date() },
       });
+      clearRefreshCookie(c);
     }
     return c.json({ error: "invalid_refresh_token" }, 401);
   }
@@ -311,7 +339,7 @@ router.post("/auth/token/refresh", tokenRefreshLimit, async (c) => {
 router.post("/auth/logout", requireAuth, async (c) => {
   const user = c.get("user");
 
-  deleteCookie(c, "yesp_rt", { path: "/" });
+  clearRefreshCookie(c);
 
   await audit({
     eventType: "user.logout",
@@ -325,7 +353,7 @@ router.post("/auth/logout", requireAuth, async (c) => {
 router.post("/auth/logout-all", requireAuth, async (c) => {
   const user = c.get("user");
 
-  deleteCookie(c, "yesp_rt", { path: "/" });
+  clearRefreshCookie(c);
 
   await db.session.updateMany({
     where: { userId: user.id, revokedAt: null },
@@ -360,7 +388,9 @@ router.post("/auth/password/reset/request", passwordResetRequestLimit, zValidato
       },
     });
 
-    await sendPasswordResetEmail(user.email, token).catch(() => {});
+    await sendPasswordResetEmail(user.email, token).catch((err) => {
+      console.error("[Email] Failed to send password reset email:", err);
+    });
 
     await audit({
       eventType: "password.reset.requested",
@@ -448,6 +478,15 @@ router.get("/auth/redirect-validate", async (c) => {
   if (!client.redirectUris.includes(redirect_uri)) return c.json({ valid: false, reason: "redirect_uri_mismatch" });
 
   return c.json({ valid: true, appName: client.application.name, slug: client.application.slug });
+});
+
+// ── JWKS — public keys for RS256 token verification ──────────────────────────
+router.get("/auth/jwks", async (c) => {
+  const jwks = await getJwks();
+  return c.json(jwks, 200, {
+    "Cache-Control": "public, max-age=3600",
+    "Content-Type": "application/json",
+  });
 });
 
 export { router as authRouter };

@@ -36,7 +36,10 @@ export type AuditEventType =
   | "organization.security.policy.updated"
   | "admin.app.registered"
   | "admin.app.updated"
-  | "admin.app.deleted";
+  | "admin.app.deleted"
+  | "user.email.change.requested"
+  | "user.email.changed"
+  | "user.password.changed";
 
 interface AuditParams {
   eventType: AuditEventType;

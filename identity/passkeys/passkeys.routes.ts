@@ -49,7 +49,7 @@ router.post("/passkeys/register/options", requireAuth, async (c) => {
     attestationType: "none",
     excludeCredentials: existing.map((p) => ({
       id: p.credentialId,
-      transports: ["internal", "hybrid"] as AuthenticatorTransport[],
+      transports: ["internal", "hybrid", "usb", "nfc", "ble"] as AuthenticatorTransport[],
     })),
     authenticatorSelection: {
       residentKey: "preferred",
@@ -127,7 +127,7 @@ router.post("/passkeys/authenticate/options", passkeyAuthLimit, zValidator("json
     rpID: env.WEBAUTHN_RP_ID,
     allowCredentials: passkeys.map((p) => ({
       id: p.credentialId,
-      transports: ["internal", "hybrid"] as AuthenticatorTransport[],
+      transports: ["internal", "hybrid", "usb", "nfc", "ble"] as AuthenticatorTransport[],
     })),
     userVerification: "required",
   });

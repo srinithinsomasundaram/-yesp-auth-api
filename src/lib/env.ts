@@ -19,6 +19,13 @@ const envSchema = z.object({
   RESEND_API_KEY: z.string().optional(),
   EMAIL_FROM: z.string().default("Yesp Auth <noreply@yesp.space>"),
   APP_URL: z.string().default("http://localhost:3100"),
+  // Cookie domain — set to ".yesp.space" in production so the RT cookie is
+  // shared across auth.yesp.space, accounts.yesp.space, admin.yesp.space
+  COOKIE_DOMAIN: z.string().optional(),
+  // Hard cap on how long a session can last regardless of refresh activity (90 days default)
+  SESSION_MAX_AGE_TTL: z.coerce.number().default(7776000),
+  // Second (previous) public key PEM — kept for 7 days during key rotation
+  JWT_PUBLIC_KEY_PATH_PREV: z.string().optional(),
   // WebAuthn
   WEBAUTHN_RP_ID: z.string().default("localhost"),
   WEBAUTHN_RP_NAME: z.string().default("Yesp Accounts"),
@@ -42,7 +49,14 @@ function loadEnv(): Env {
     console.error("Invalid environment variables:", result.error.flatten().fieldErrors);
     process.exit(1);
   }
-  return result.data;
+  const data = result.data;
+  if (data.NODE_ENV === "production" && !data.RESEND_API_KEY) {
+    console.warn("[WARN] RESEND_API_KEY is not set — emails will only be logged, not sent.");
+  }
+  if (data.NODE_ENV === "production" && !data.COOKIE_DOMAIN) {
+    console.warn("[WARN] COOKIE_DOMAIN is not set — RT cookie may not work across subdomains.");
+  }
+  return data;
 }
 
 export const env = loadEnv();

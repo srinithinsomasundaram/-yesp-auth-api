@@ -8,12 +8,19 @@ import { env } from "./lib/env.js";
 import { v1 } from "./routes/v1.js";
 import { db } from "./db/client.js";
 import { globalLimit } from "./middleware/rateLimit.js";
+import { requestId } from "./middleware/auth.js";
 
 const app = new Hono();
 
 // ─── Global Middleware ────────────────────────────────────────────────────────
 
-app.use("*", logger());
+// Request correlation ID — logged and returned in every response
+app.use("*", requestId);
+
+// Only log requests in non-production or when explicitly enabled
+if (env.NODE_ENV !== "production" || process.env.ENABLE_REQUEST_LOG === "1") {
+  app.use("*", logger());
+}
 
 app.use(
   "*",
@@ -22,6 +29,11 @@ app.use(
     xFrameOptions: "DENY",
     xContentTypeOptions: "nosniff",
     referrerPolicy: "strict-origin-when-cross-origin",
+    permissionsPolicy: {
+      camera: [],
+      microphone: [],
+      geolocation: [],
+    },
   })
 );
 
