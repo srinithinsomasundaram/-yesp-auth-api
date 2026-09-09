@@ -6,7 +6,7 @@ import { createRouter } from "../../src/lib/hono.js";
 import { db } from "../../src/db/client.js";
 import { hashPassword, verifyPassword, isStrongPassword } from "../../src/lib/password.js";
 import { generateToken, hashToken } from "../../src/lib/crypto.js";
-import { signAccessToken, signIdToken, getJwks } from "../../src/lib/tokens.js";
+import { signAccessToken, signIdToken, getJwks, verifyToken } from "../../src/lib/tokens.js";
 import { audit } from "../../src/lib/audit.js";
 import {
   loginRateLimit,
