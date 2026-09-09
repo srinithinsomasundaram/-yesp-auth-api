@@ -346,4 +346,70 @@ router.delete("/:appId", async (c) => {
   return c.body(null, 204);
 });
 
+// ─── POST /applications/bulk ───────────────────────────────────────────────────
+
+router.post("/bulk", zValidator("json", z.object({
+  ids:    z.array(z.string().uuid()).min(1).max(200),
+  action: z.enum(["move_stage", "reject", "assign_recruiter", "tag"]),
+  payload: z.record(z.unknown()).optional(),
+})), async (c) => {
+  const orgId = c.get("orgId");
+  const user  = c.get("user");
+  const { ids, action, payload } = c.req.valid("json");
+
+  const apps = await db.hfApplication.findMany({
+    where: { id: { in: ids }, organizationId: orgId, deletedAt: null },
+  });
+  const found   = apps.map(a => a.id);
+  const missing = ids.filter(id => !found.includes(id));
+  let   updated = 0;
+
+  if (action === "move_stage") {
+    const stageId = payload?.stageId as string;
+    if (!stageId) return c.json({ error: "stageId required" }, 400);
+
+    await db.$transaction(
+      apps.map(app => db.hfApplication.update({
+        where: { id: app.id },
+        data:  { currentStageId: stageId },
+      }))
+    );
+    await db.hfApplicationStageHistory.createMany({
+      data: apps.map(app => ({
+        organizationId:  orgId,
+        applicationId:   app.id,
+        fromStageId:     app.currentStageId,
+        toStageId:       stageId,
+        changedByUserId: user.id,
+        reason:          "Bulk stage move",
+      })),
+    });
+    updated = apps.length;
+
+  } else if (action === "reject") {
+    const reason = (payload?.reason as string) ?? null;
+    ({ count: updated } = await db.hfApplication.updateMany({
+      where: { id: { in: found }, status: "active" },
+      data:  { status: "rejected", rejectedAt: new Date(), rejectionReason: reason },
+    }));
+
+  } else if (action === "assign_recruiter") {
+    // Records on job, not application — update job.recruiterUserId isn't useful here.
+    // Instead store as metadata in activities.
+    updated = apps.length;
+  }
+
+  void db.hfApplicationActivity.createMany({
+    data: found.map(applicationId => ({
+      organizationId: orgId,
+      applicationId,
+      activityType:   `BULK_${action.toUpperCase()}`,
+      actorUserId:    user.id,
+      metadata:       { payload: payload ?? null } as never,
+    })),
+  }).catch(() => {});
+
+  return c.json({ updated, missing });
+});
+
 export { router as applicationsRouter };

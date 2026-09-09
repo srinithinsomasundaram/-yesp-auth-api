@@ -569,9 +569,11 @@ model HfJob {
   updatedAt           DateTime  @updatedAt      @map("updated_at")
   deletedAt           DateTime? @map("deleted_at")
 
-  pipeline     HfPipeline?    @relation(fields: [pipelineId], references: [id])
+  pipeline     HfPipeline?      @relation(fields: [pipelineId], references: [id])
   applications HfApplication[]
   tasks        HfTask[]
+  hiringTeam   HfJobHiringTeam[]
+  rounds       HfInterviewRound[]
 
   @@index([organizationId])
   @@index([organizationId, status])
@@ -676,10 +678,11 @@ model HfApplication {
   candidate    HfCandidate                 @relation(fields: [candidateId], references: [id])
   pipeline     HfPipeline?                 @relation(fields: [pipelineId], references: [id])
   currentStage HfPipelineStage?            @relation("CurrentStage", fields: [currentStageId], references: [id])
-  stageHistory HfApplicationStageHistory[]
-  activities   HfApplicationActivity[]
-  interviews   HfInterview[]
-  tasks        HfTask[]
+  stageHistory   HfApplicationStageHistory[]
+  activities     HfApplicationActivity[]
+  interviews     HfInterview[]
+  tasks          HfTask[]
+  communications HfCommunication[]
 
   @@index([organizationId])
   @@index([jobId])
@@ -724,22 +727,32 @@ model HfApplicationActivity {
 // ─── HireFlow: Interviews ─────────────────────────────────────────────────────
 
 model HfInterview {
-  id             String    @id @default(uuid())
-  organizationId String    @map("organization_id")
-  applicationId  String    @map("application_id")
-  title          String
-  scheduledStart DateTime? @map("scheduled_start")
-  scheduledEnd   DateTime? @map("scheduled_end")
-  timezone       String?
-  meetingUrl     String?   @map("meeting_url")
-  location       String?
-  status         String    @default("scheduled")
-  completedAt    DateTime? @map("completed_at")
-  createdAt      DateTime  @default(now()) @map("created_at")
-  updatedAt      DateTime  @updatedAt      @map("updated_at")
+  id              String    @id @default(uuid())
+  organizationId  String    @map("organization_id")
+  applicationId   String    @map("application_id")
+  roundId         String?   @map("round_id")
+  scorecardId     String?   @map("scorecard_id")
+  title           String
+  roundNumber     Int?      @map("round_number")
+  scheduledStart  DateTime? @map("scheduled_start")
+  scheduledEnd    DateTime? @map("scheduled_end")
+  timezone        String?
+  meetingUrl      String?   @map("meeting_url")
+  location        String?
+  // status machine: requested | scheduled | confirmed | completed | feedback_pending | feedback_complete | cancelled
+  status          String    @default("scheduled")
+  cancelledAt     DateTime? @map("cancelled_at")
+  cancelReason    String?   @map("cancel_reason")
+  completedAt     DateTime? @map("completed_at")
+  createdByUserId String?   @map("created_by_user_id")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt      @map("updated_at")
 
   application  HfApplication            @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  round        HfInterviewRound?        @relation("InterviewRound", fields: [roundId], references: [id])
+  scorecard    HfScorecardTemplate?     @relation("ScorecardTemplate", fields: [scorecardId], references: [id])
   participants HfInterviewParticipant[]
+  feedbacks    HfFeedback[]
 
   @@index([applicationId])
   @@index([organizationId, scheduledStart])
@@ -771,12 +784,15 @@ model HfTask {
   taskType         String    @map("task_type")
   title            String
   description      String?
+  // status machine: pending | in_progress | completed | cancelled | snoozed
   status           String    @default("pending")
-  priority         String    @default("normal")
+  priority         String    @default("normal") // low | normal | high | urgent
   assignedToUserId String?   @map("assigned_to_user_id")
   dueAt            DateTime? @map("due_at")
+  slaBreachedAt    DateTime? @map("sla_breached_at")
   completedAt      DateTime? @map("completed_at")
   sourceEvent      String?   @map("source_event")
+  deletedAt        DateTime? @map("deleted_at")
   createdAt        DateTime  @default(now()) @map("created_at")
   updatedAt        DateTime  @updatedAt      @map("updated_at")
 
@@ -788,4 +804,274 @@ model HfTask {
   @@index([assignedToUserId, status])
   @@index([organizationId, dueAt])
   @@map("hf_tasks")
+}
+
+// ─── HireFlow: Phase 2 — Role Permissions ─────────────────────────────────────
+
+// HireFlow-specific role inside an org (separate from Yesp Auth org role)
+model HfMember {
+  id             String   @id @default(uuid())
+  organizationId String   @map("organization_id")
+  userId         String   @map("user_id")
+  role           String   @default("member") // admin | manager | recruiter | coordinator | interviewer | member
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt      @map("updated_at")
+
+  jobAssignments HfJobHiringTeam[]
+
+  @@unique([organizationId, userId])
+  @@index([organizationId])
+  @@map("hf_members")
+}
+
+// Who is on a specific job's hiring team and in what capacity
+model HfJobHiringTeam {
+  id             String   @id @default(uuid())
+  organizationId String   @map("organization_id")
+  jobId          String   @map("job_id")
+  memberId       String   @map("member_id")
+  teamRole       String   @map("team_role") // hiring_manager | recruiter | coordinator
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  job    HfJob    @relation(fields: [jobId],    references: [id], onDelete: Cascade)
+  member HfMember @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  @@unique([jobId, memberId])
+  @@index([organizationId, jobId])
+  @@map("hf_job_hiring_team")
+}
+
+// ─── HireFlow: Phase 3 — Interview Engine (extended) ──────────────────────────
+
+// Interview round template for a job (e.g. "Round 1 - Screening", "Round 2 - Technical")
+model HfInterviewRound {
+  id             String   @id @default(uuid())
+  organizationId String   @map("organization_id")
+  jobId          String   @map("job_id")
+  name           String
+  roundNumber    Int      @map("round_number")
+  durationMins   Int?     @map("duration_mins")
+  notes          String?
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  job        HfJob         @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  interviews HfInterview[] @relation("InterviewRound")
+
+  @@unique([jobId, roundNumber])
+  @@index([organizationId, jobId])
+  @@map("hf_interview_rounds")
+}
+
+// ─── HireFlow: Phase 4 — Scorecard Engine ─────────────────────────────────────
+
+// Reusable scorecard template (can be linked to a job or used globally)
+model HfScorecardTemplate {
+  id             String   @id @default(uuid())
+  organizationId String   @map("organization_id")
+  name           String
+  description    String?
+  isDefault      Boolean  @default(false) @map("is_default")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt      @map("updated_at")
+
+  competencies HfScorecardCompetency[]
+  interviews   HfInterview[]          @relation("ScorecardTemplate")
+  feedbacks    HfFeedback[]
+
+  @@index([organizationId])
+  @@map("hf_scorecard_templates")
+}
+
+// Competency / dimension inside a scorecard template
+model HfScorecardCompetency {
+  id           String  @id @default(uuid())
+  templateId   String  @map("template_id")
+  name         String
+  description  String?
+  ratingMin    Int     @default(1) @map("rating_min")
+  ratingMax    Int     @default(5) @map("rating_max")
+  weight       Decimal @default(1) // relative weight for overall score
+  isRequired   Boolean @default(true) @map("is_required")
+  position     Int     @default(0)
+
+  template HfScorecardTemplate  @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  answers  HfFeedbackAnswer[]
+
+  @@index([templateId])
+  @@map("hf_scorecard_competencies")
+}
+
+// Interview feedback submitted by a participant
+model HfFeedback {
+  id              String    @id @default(uuid())
+  organizationId  String    @map("organization_id")
+  interviewId     String    @map("interview_id")
+  participantId   String    @map("participant_id")   // HfInterviewParticipant.id
+  scorecardId     String?   @map("scorecard_id")     // HfScorecardTemplate.id
+  overallScore    Decimal?  @map("overall_score")
+  recommendation  String?   // strong_hire | hire | no_hire | strong_no_hire
+  strengths       String?
+  concerns        String?
+  privateNotes    String?   @map("private_notes")
+  submittedAt     DateTime? @map("submitted_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt      @map("updated_at")
+
+  interview   HfInterview           @relation(fields: [interviewId],   references: [id], onDelete: Cascade)
+  scorecard   HfScorecardTemplate?  @relation(fields: [scorecardId],  references: [id])
+  answers     HfFeedbackAnswer[]
+
+  @@unique([interviewId, participantId])
+  @@index([organizationId, interviewId])
+  @@map("hf_feedback")
+}
+
+// One answer per competency inside a feedback response
+model HfFeedbackAnswer {
+  id            String   @id @default(uuid())
+  feedbackId    String   @map("feedback_id")
+  competencyId  String   @map("competency_id")
+  rating        Int?
+  comment       String?
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  feedback    HfFeedback            @relation(fields: [feedbackId],   references: [id], onDelete: Cascade)
+  competency  HfScorecardCompetency @relation(fields: [competencyId], references: [id])
+
+  @@unique([feedbackId, competencyId])
+  @@index([feedbackId])
+  @@map("hf_feedback_answers")
+}
+
+// ─── HireFlow: Phase 5 — SLA Engine ───────────────────────────────────────────
+
+// SLA policy defines time limits for task types
+model HfSlaPolicy {
+  id              String   @id @default(uuid())
+  organizationId  String   @map("organization_id")
+  taskType        String   @map("task_type")   // matches HfTask.taskType
+  priority        String   @default("normal")
+  warningMins     Int      @map("warning_mins")
+  dueMins         Int      @map("due_mins")
+  isActive        Boolean  @default(true) @map("is_active")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt      @map("updated_at")
+
+  @@unique([organizationId, taskType, priority])
+  @@index([organizationId])
+  @@map("hf_sla_policies")
+}
+
+// SLA event log — immutable record of each SLA state change
+model HfSlaEvent {
+  id        String   @id @default(uuid())
+  taskId    String   @map("task_id")
+  eventType String   @map("event_type") // SLA_STARTED | SLA_WARNING | SLA_BREACHED | SLA_MET
+  metadata  Json     @default("{}")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([taskId])
+  @@map("hf_sla_events")
+}
+
+// ─── HireFlow: Phase 6 — Automation Rules ─────────────────────────────────────
+
+model HfAutomationRule {
+  id             String   @id @default(uuid())
+  organizationId String   @map("organization_id")
+  name           String
+  description    String?
+  trigger        String   // INTERVIEW_COMPLETED | STAGE_CHANGED | TASK_SLA_BREACHED | etc.
+  conditions     Json     @default("[]")  // array of {field, op, value}
+  actions        Json     @default("[]")  // array of {type, payload}
+  isActive       Boolean  @default(true) @map("is_active")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt      @map("updated_at")
+
+  executions HfAutomationExecution[]
+
+  @@index([organizationId, trigger])
+  @@map("hf_automation_rules")
+}
+
+// Execution log for each time a rule fires
+model HfAutomationExecution {
+  id        String   @id @default(uuid())
+  ruleId    String   @map("rule_id")
+  trigger   String
+  payload   Json     @default("{}")
+  result    String   @default("success") // success | failed | skipped
+  error     String?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  rule HfAutomationRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+
+  @@index([ruleId])
+  @@map("hf_automation_executions")
+}
+
+// ─── HireFlow: Phase 8 — Notifications ────────────────────────────────────────
+
+model HfNotification {
+  id             String    @id @default(uuid())
+  organizationId String    @map("organization_id")
+  recipientId    String    @map("recipient_id")   // userId
+  type           String    // INTERVIEW_SCHEDULED | FEEDBACK_REQUESTED | TASK_ASSIGNED | etc.
+  channel        String    @default("in_app")     // in_app | email | sms
+  title          String
+  body           String
+  metadata       Json      @default("{}")
+  readAt         DateTime? @map("read_at")
+  sentAt         DateTime? @map("sent_at")
+  status         String    @default("pending")    // pending | sent | failed | read
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  @@index([organizationId, recipientId, status])
+  @@index([recipientId, readAt])
+  @@map("hf_notifications")
+}
+
+// ─── HireFlow: Phase 9 — Communication Engine ─────────────────────────────────
+
+model HfCommunication {
+  id              String    @id @default(uuid())
+  organizationId  String    @map("organization_id")
+  applicationId   String    @map("application_id")
+  candidateId     String    @map("candidate_id")
+  direction       String    // outbound | inbound
+  channel         String    // email | sms | whatsapp
+  subject         String?
+  body            String
+  templateId      String?   @map("template_id")
+  sentByUserId    String?   @map("sent_by_user_id")
+  sentAt          DateTime? @map("sent_at")
+  deliveryStatus  String    @default("pending") @map("delivery_status")
+  externalId      String?   @map("external_id") // provider message ID
+  createdAt       DateTime  @default(now()) @map("created_at")
+
+  application HfApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  @@index([applicationId])
+  @@index([organizationId, candidateId])
+  @@map("hf_communications")
+}
+
+// ─── HireFlow: Phase 11 — Audit Log ───────────────────────────────────────────
+
+model HfAuditLog {
+  id             String   @id @default(uuid())
+  organizationId String   @map("organization_id")
+  actorUserId    String?  @map("actor_user_id")
+  action         String   // APPLICATION_STAGE_CHANGED | INTERVIEW_RESCHEDULED | etc.
+  resourceType   String   @map("resource_type") // job | application | candidate | interview | task
+  resourceId     String   @map("resource_id")
+  before         Json?
+  after          Json?
+  metadata       Json     @default("{}")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  @@index([organizationId, resourceType, resourceId])
+  @@index([organizationId, actorUserId])
+  @@index([organizationId, createdAt])
+  @@map("hf_audit_logs")
 }
