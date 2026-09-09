@@ -336,16 +336,53 @@ router.post("/auth/token/refresh", tokenRefreshLimit, async (c) => {
 
 // ─── Logout ───────────────────────────────────────────────────────────────────
 
-router.post("/auth/logout", requireAuth, async (c) => {
-  const user = c.get("user");
+router.post("/auth/logout", async (c) => {
+  // Accept the AT from the header OR the RT from the cookie/body so logout
+  // always works — even when the AT has already expired.
+  let userId: string | undefined;
+
+  const authHeader = c.req.header("Authorization");
+  if (authHeader?.startsWith("Bearer ")) {
+    try {
+      const payload = await verifyToken(authHeader.slice(7));
+      userId = payload.sub ?? undefined;
+    } catch { /* expired AT — still proceed with RT-based logout */ }
+  }
+
+  // Identify the session via the RT (cookie or body) so we can revoke it
+  let bodyToken: string | undefined;
+  try {
+    const body = await c.req.json() as { refreshToken?: string };
+    bodyToken = body?.refreshToken;
+  } catch { /* no body */ }
+
+  const rawRt = bodyToken ?? getCookie(c, "yesp_rt");
+  if (rawRt) {
+    const tokenHash = hashToken(rawRt);
+    const record = await db.refreshToken.findUnique({
+      where: { tokenHash },
+      select: { id: true, sessionId: true, userId: true },
+    }).catch(() => null);
+
+    if (record) {
+      userId ??= record.userId;
+      // Revoke the session so any remaining refresh tokens in this family stop working
+      await db.session.update({
+        where: { id: record.sessionId },
+        data: { revokedAt: new Date() },
+      }).catch(() => {});
+    }
+  }
 
   clearRefreshCookie(c);
 
-  await audit({
-    eventType: "user.logout",
-    actorUserId: user.id,
-    ipAddress: c.req.header("x-forwarded-for") ?? undefined,
-  });
+  if (userId) {
+    await audit({
+      eventType: "user.logout",
+      actorUserId: userId,
+      ipAddress: c.req.header("x-forwarded-for") ?? undefined,
+    }).catch(() => {});
+  }
 
   return c.json({ success: true });
 });
