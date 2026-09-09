@@ -6,6 +6,7 @@ import { jobsRouter }         from "./jobs/jobs.routes.js";
 import { candidatesRouter }   from "./candidates/candidates.routes.js";
 import { applicationsRouter } from "./applications/applications.routes.js";
 import { interviewsRouter }   from "./interviews/interviews.routes.js";
+import { panelsRouter }       from "./panels/panels.routes.js";
 import { scorecardsRouter }   from "./scorecards/scorecards.routes.js";
 import { feedbackRouter }     from "./scorecards/feedback.routes.js";
 import { tasksRouter }        from "./tasks/tasks.routes.js";
@@ -25,6 +26,8 @@ hireflowRouter.route("/organizations/:orgId/applications", applicationsRouter);
 
 // ── Interview Engine ──────────────────────────────────────────────────────────
 hireflowRouter.route("/organizations/:orgId/interviews",   interviewsRouter);
+// Panels: nested under applications (POST/GET) + flat ops view (GET /panels, GET/PATCH/DELETE /panels/:id)
+hireflowRouter.route("/organizations/:orgId",              panelsRouter);
 hireflowRouter.route("/organizations/:orgId/scorecards",   scorecardsRouter);
 hireflowRouter.route("/organizations/:orgId/feedback",     feedbackRouter);
 

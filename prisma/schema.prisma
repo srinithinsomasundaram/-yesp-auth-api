@@ -680,6 +680,7 @@ model HfApplication {
   currentStage HfPipelineStage?            @relation("CurrentStage", fields: [currentStageId], references: [id])
   stageHistory   HfApplicationStageHistory[]
   activities     HfApplicationActivity[]
+  panels         HfInterviewPanel[]
   interviews     HfInterview[]
   tasks          HfTask[]
   communications HfCommunication[]
@@ -724,12 +725,61 @@ model HfApplicationActivity {
   @@map("hf_application_activities")
 }
 
+// ─── HireFlow: Interview Panels ───────────────────────────────────────────────
+
+// A panel groups one or more interview rounds under a named stage (Technical, Leadership, Final)
+// Panels belong to an Application — same candidate interviewing for two jobs gets two panel sets
+model HfInterviewPanel {
+  id                   String    @id @default(uuid())
+  organizationId       String    @map("organization_id")
+  applicationId        String    @map("application_id")
+  scorecardId          String?   @map("scorecard_id")       // default scorecard for all rounds in this panel
+  name                 String                               // "Technical", "Leadership", "Culture / Final"
+  sequence             Int       @default(0)                // display/execution order
+  isRequired           Boolean   @default(true) @map("is_required")
+  // status machine: pending | scheduling | in_progress | feedback_pending | completed | cancelled
+  status               String    @default("pending")
+  recommendation       String?                              // strong_hire | hire | no_hire | strong_no_hire
+  feedbackDeadlineAt   DateTime? @map("feedback_deadline_at")
+  completedAt          DateTime? @map("completed_at")
+  cancelledAt          DateTime? @map("cancelled_at")
+  createdByUserId      String?   @map("created_by_user_id")
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @updatedAt      @map("updated_at")
+
+  application HfApplication        @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  scorecard   HfScorecardTemplate? @relation("PanelScorecard", fields: [scorecardId], references: [id])
+  members     HfPanelMember[]
+  interviews  HfInterview[]
+
+  @@index([organizationId])
+  @@index([applicationId])
+  @@map("hf_interview_panels")
+}
+
+// Who is on a panel and in what role
+model HfPanelMember {
+  id               String   @id @default(uuid())
+  panelId          String   @map("panel_id")
+  userId           String   @map("user_id")
+  role             String   @default("interviewer") // lead | interviewer | observer
+  feedbackRequired Boolean  @default(true) @map("feedback_required")
+  addedAt          DateTime @default(now()) @map("added_at")
+
+  panel HfInterviewPanel @relation(fields: [panelId], references: [id], onDelete: Cascade)
+
+  @@unique([panelId, userId])
+  @@index([panelId])
+  @@map("hf_panel_members")
+}
+
 // ─── HireFlow: Interviews ─────────────────────────────────────────────────────
 
 model HfInterview {
   id              String    @id @default(uuid())
   organizationId  String    @map("organization_id")
   applicationId   String    @map("application_id")
+  panelId         String?   @map("panel_id")        // which panel this round belongs to
   roundId         String?   @map("round_id")
   scorecardId     String?   @map("scorecard_id")
   title           String
@@ -749,12 +799,14 @@ model HfInterview {
   updatedAt       DateTime  @updatedAt      @map("updated_at")
 
   application  HfApplication            @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  panel        HfInterviewPanel?        @relation(fields: [panelId], references: [id])
   round        HfInterviewRound?        @relation("InterviewRound", fields: [roundId], references: [id])
   scorecard    HfScorecardTemplate?     @relation("ScorecardTemplate", fields: [scorecardId], references: [id])
   participants HfInterviewParticipant[]
   feedbacks    HfFeedback[]
 
   @@index([applicationId])
+  @@index([panelId])
   @@index([organizationId, scheduledStart])
   @@map("hf_interviews")
 }
@@ -875,6 +927,7 @@ model HfScorecardTemplate {
   updatedAt      DateTime @updatedAt      @map("updated_at")
 
   competencies HfScorecardCompetency[]
+  panels       HfInterviewPanel[]     @relation("PanelScorecard")
   interviews   HfInterview[]          @relation("ScorecardTemplate")
   feedbacks    HfFeedback[]
 
