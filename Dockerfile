@@ -21,11 +21,12 @@ RUN apk add --no-cache openssl wget
 
 ENV NODE_ENV=production
 
+# Copy only production node_modules from builder — no npm install needed at runtime.
+# This avoids any outbound network access during the runner stage build.
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
 COPY package.json ./
 COPY prisma ./prisma
-# Same dummy URL for generate — real DATABASE_URL is injected at runtime by the platform
-RUN DATABASE_URL="postgresql://build:build@localhost:5432/build" npm install --omit=dev
-
 COPY --from=builder /app/dist ./dist
 
 EXPOSE 3100
