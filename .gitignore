@@ -1,0 +1,16 @@
+node_modules/
+dist/
+.env
+.env.local
+.env.production
+.env.*.local
+prisma/migrations/*.sql.bak
+uploads/
+.playwright-mcp/
+test-*.png
+Logo*.png
+!console/public/logo.png
+*.tsbuildinfo
+keys/
+logs/
+

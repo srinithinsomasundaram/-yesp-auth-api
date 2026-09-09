@@ -1,0 +1,503 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Users ───────────────────────────────────────────────────────────────────
+
+enum UserStatus {
+  active
+  suspended
+  deleted
+}
+
+model User {
+  id           String     @id @default(uuid())
+  email        String     @unique
+  emailVerified Boolean   @default(false) @map("email_verified")
+  firstName    String?    @map("first_name")
+  lastName     String?    @map("last_name")
+  displayName    String?    @map("display_name")
+  avatarData     Bytes?     @map("avatar_data")
+  avatarMimeType String?    @map("avatar_mime_type")
+  status         UserStatus @default(active)
+  createdAt    DateTime   @default(now()) @map("created_at")
+  updatedAt    DateTime   @updatedAt @map("updated_at")
+
+  credentials             Credential[]
+  passkeys                Passkey[]
+  mfaMethods              MfaMethod[]
+  sessions                Session[]
+  devices                 Device[]
+  organizationMemberships OrganizationMembership[]
+  applicationAccess       ApplicationAccess[]
+  auditEvents             AuditEvent[]             @relation("AuditActor")
+  emailVerifications      EmailVerification[]
+  passwordResets          PasswordReset[]
+  refreshTokens           RefreshToken[]
+  ssoSessions             SsoSession[]
+
+  @@map("users")
+}
+
+// ─── Credentials ─────────────────────────────────────────────────────────────
+
+enum CredentialType {
+  password
+  passkey
+  google
+  microsoft
+  enterprise_sso
+}
+
+model Credential {
+  id             String         @id @default(uuid())
+  userId         String         @map("user_id")
+  credentialType CredentialType @map("credential_type")
+  passwordHash   String?        @map("password_hash")
+  createdAt      DateTime       @default(now()) @map("created_at")
+  updatedAt      DateTime       @updatedAt @map("updated_at")
+  lastUsedAt     DateTime?      @map("last_used_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, credentialType])
+  @@map("credentials")
+}
+
+// ─── Email Verification ───────────────────────────────────────────────────────
+
+model EmailVerification {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  tokenHash String   @unique @map("token_hash")
+  expiresAt DateTime @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("email_verifications")
+}
+
+// ─── Password Reset ───────────────────────────────────────────────────────────
+
+model PasswordReset {
+  id        String    @id @default(uuid())
+  userId    String    @map("user_id")
+  tokenHash String    @unique @map("token_hash")
+  expiresAt DateTime  @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("password_resets")
+}
+
+// ─── Passkeys ────────────────────────────────────────────────────────────────
+
+model Passkey {
+  id           String    @id @default(uuid())
+  userId       String    @map("user_id")
+  credentialId String    @unique @map("credential_id")
+  publicKey    Bytes     @map("public_key")
+  counter      BigInt    @default(0)
+  deviceName   String?   @map("device_name")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  lastUsedAt   DateTime? @map("last_used_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("passkeys")
+}
+
+// ─── MFA ──────────────────────────────────────────────────────────────────────
+
+enum MfaType {
+  totp
+  webauthn
+  recovery_code
+}
+
+enum MfaStatus {
+  pending
+  active
+  disabled
+}
+
+model MfaMethod {
+  id              String    @id @default(uuid())
+  userId          String    @map("user_id")
+  type            MfaType
+  status          MfaStatus @default(pending)
+  secretReference String?   @map("secret_reference")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  verifiedAt      DateTime? @map("verified_at")
+
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  recoveryCodes RecoveryCode[]
+
+  @@map("mfa_methods")
+}
+
+model RecoveryCode {
+  id          String    @id @default(uuid())
+  mfaMethodId String    @map("mfa_method_id")
+  codeHash    String    @map("code_hash")
+  usedAt      DateTime? @map("used_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  mfaMethod MfaMethod @relation(fields: [mfaMethodId], references: [id], onDelete: Cascade)
+
+  @@map("recovery_codes")
+}
+
+// ─── Sessions ─────────────────────────────────────────────────────────────────
+
+enum SessionRiskStatus {
+  normal
+  elevated
+  suspicious
+  revoked
+}
+
+model Session {
+  id             String            @id @default(uuid())
+  userId         String            @map("user_id")
+  deviceId       String?           @map("device_id")
+  createdAt      DateTime          @default(now()) @map("created_at")
+  lastActivityAt DateTime          @default(now()) @map("last_activity_at")
+  expiresAt      DateTime          @map("expires_at")
+  revokedAt      DateTime?         @map("revoked_at")
+  riskStatus     SessionRiskStatus @default(normal) @map("risk_status")
+
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  device        Device?        @relation(fields: [deviceId], references: [id])
+  refreshTokens RefreshToken[]
+
+  @@map("sessions")
+}
+
+model RefreshToken {
+  id        String    @id @default(uuid())
+  sessionId String    @map("session_id")
+  userId    String    @map("user_id")
+  tokenHash String    @unique @map("token_hash")
+  expiresAt DateTime  @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  revokedAt DateTime? @map("revoked_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("refresh_tokens")
+}
+
+// ─── Devices ──────────────────────────────────────────────────────────────────
+
+enum DeviceTrustStatus {
+  unknown
+  trusted
+  untrusted
+}
+
+model Device {
+  id           String            @id @default(uuid())
+  userId       String            @map("user_id")
+  deviceName   String?           @map("device_name")
+  userAgent    String?           @map("user_agent")
+  firstSeenAt  DateTime          @default(now()) @map("first_seen_at")
+  lastSeenAt   DateTime          @default(now()) @map("last_seen_at")
+  trustedStatus DeviceTrustStatus @default(unknown) @map("trusted_status")
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sessions Session[]
+
+  @@map("devices")
+}
+
+// ─── Organizations ────────────────────────────────────────────────────────────
+
+enum OrgStatus {
+  active
+  suspended
+  deleted
+}
+
+model Organization {
+  id        String    @id @default(uuid())
+  name      String
+  slug      String    @unique
+  status    OrgStatus @default(active)
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+
+  memberships      OrganizationMembership[]
+  securityPolicy   OrganizationSecurityPolicy?
+  ssoConnections   EnterpriseSsoConnection[]
+  applicationAccess ApplicationAccess[]
+  auditEvents      AuditEvent[]
+
+  @@map("organizations")
+}
+
+// ─── Organization Membership ──────────────────────────────────────────────────
+
+enum MembershipStatus {
+  invited
+  active
+  suspended
+  removed
+}
+
+enum OrgRole {
+  organization_owner
+  identity_admin
+  security_admin
+  application_admin
+  user_manager
+  billing_admin
+  member
+}
+
+model OrganizationMembership {
+  id             String           @id @default(uuid())
+  organizationId String           @map("organization_id")
+  userId         String           @map("user_id")
+  role           OrgRole          @default(member)
+  status         MembershipStatus @default(invited)
+  joinedAt       DateTime?        @map("joined_at")
+  createdAt      DateTime         @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, userId])
+  @@map("organization_memberships")
+}
+
+// ─── Organization Invitations ─────────────────────────────────────────────────
+
+model OrganizationInvitation {
+  id             String    @id @default(uuid())
+  organizationId String    @map("organization_id")
+  email          String
+  role           OrgRole   @default(member)
+  tokenHash      String    @unique @map("token_hash")
+  expiresAt      DateTime  @map("expires_at")
+  acceptedAt     DateTime? @map("accepted_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  @@map("organization_invitations")
+}
+
+// ─── Organization Security Policies ──────────────────────────────────────────
+
+model OrganizationSecurityPolicy {
+  organizationId       String   @id @map("organization_id")
+  requireMfa           Boolean  @default(false) @map("require_mfa")
+  requireSso           Boolean  @default(false) @map("require_sso")
+  allowedAuthMethods   String[] @map("allowed_auth_methods")
+  sessionMaxAgeSecs    Int      @default(2592000) @map("session_max_age_secs")
+  updatedAt            DateTime @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@map("organization_security_policies")
+}
+
+// ─── Applications ─────────────────────────────────────────────────────────────
+
+enum AppStatus {
+  active
+  inactive
+}
+
+enum ApplicationType {
+  web
+  spa
+  mobile
+  server
+  service
+  internal
+}
+
+model Application {
+  id          String          @id @default(uuid())
+  name        String
+  slug        String          @unique
+  type        ApplicationType @default(web)
+  description String?
+  logoUrl     String?         @map("logo_url")
+  homepageUrl String?         @map("homepage_url")
+  status      AppStatus       @default(active)
+  createdAt   DateTime        @default(now()) @map("created_at")
+  updatedAt   DateTime        @updatedAt @map("updated_at")
+
+  oauthClients      OAuthClient[]
+  applicationAccess ApplicationAccess[]
+  authCodes         AuthorizationCode[]
+  auditEvents       AuditEvent[]
+
+  @@map("applications")
+}
+
+// ─── OAuth Clients ────────────────────────────────────────────────────────────
+
+enum OAuthClientStatus {
+  active
+  revoked
+}
+
+model OAuthClient {
+  id                  String           @id @default(uuid())
+  applicationId       String           @map("application_id")
+  clientId            String           @unique @map("client_id")
+  clientSecretHash    String?          @map("client_secret_hash")
+  redirectUris        String[]         @map("redirect_uris")
+  allowedScopes       String[]         @map("allowed_scopes")
+  status              OAuthClientStatus @default(active)
+  createdAt           DateTime         @default(now()) @map("created_at")
+
+  application   Application         @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  authCodes     AuthorizationCode[]
+
+  @@map("oauth_clients")
+}
+
+// ─── Authorization Codes ──────────────────────────────────────────────────────
+
+model AuthorizationCode {
+  id            String    @id @default(uuid())
+  clientId      String    @map("client_id")
+  applicationId String    @map("application_id")
+  userId        String    @map("user_id")
+  codeHash      String    @unique @map("code_hash")
+  redirectUri   String    @map("redirect_uri")
+  scopes        String[]
+  pkceChallenge String    @map("pkce_challenge")
+  pkceMethod    String    @default("S256") @map("pkce_method")
+  expiresAt     DateTime  @map("expires_at")
+  usedAt        DateTime? @map("used_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  client      OAuthClient @relation(fields: [clientId], references: [clientId])
+  application Application @relation(fields: [applicationId], references: [id])
+
+  @@map("authorization_codes")
+}
+
+// ─── Application Access ───────────────────────────────────────────────────────
+
+enum AccessStatus {
+  active
+  suspended
+  revoked
+}
+
+model ApplicationAccess {
+  id             String       @id @default(uuid())
+  userId         String       @map("user_id")
+  organizationId String       @map("organization_id")
+  applicationId  String       @map("application_id")
+  status         AccessStatus @default(active)
+  createdAt      DateTime     @default(now()) @map("created_at")
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  application  Application  @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, organizationId, applicationId])
+  @@map("application_access")
+}
+
+// ─── Enterprise SSO ───────────────────────────────────────────────────────────
+
+enum SsoProtocol {
+  oidc
+  saml
+}
+
+enum SsoStatus {
+  active
+  inactive
+}
+
+model EnterpriseSsoConnection {
+  id             String    @id @default(uuid())
+  organizationId String    @map("organization_id")
+  protocol       SsoProtocol
+  issuer         String
+  domains        String[]
+  metadata       Json
+  status         SsoStatus @default(inactive)
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@map("enterprise_sso_connections")
+}
+
+// ─── SSO Sessions ─────────────────────────────────────────────────────────────
+
+model SsoSession {
+  id         String    @id @default(uuid())
+  userId     String    @map("user_id")
+  tokenHash  String    @unique @map("token_hash")
+  expiresAt  DateTime  @map("expires_at")
+  ipAddress  String?   @map("ip_address")
+  userAgent  String?   @map("user_agent")
+  createdAt  DateTime  @default(now()) @map("created_at")
+  lastUsedAt DateTime  @default(now()) @map("last_used_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([tokenHash])
+  @@map("sso_sessions")
+}
+
+// ─── Audit Events ─────────────────────────────────────────────────────────────
+
+model AuditEvent {
+  id             String   @id @default(uuid())
+  eventType      String   @map("event_type")
+  actorUserId    String?  @map("actor_user_id")
+  organizationId String?  @map("organization_id")
+  applicationId  String?  @map("application_id")
+  targetType     String?  @map("target_type")
+  targetId       String?  @map("target_id")
+  ipAddress      String?  @map("ip_address")
+  userAgent      String?  @map("user_agent")
+  metadata       Json     @default("{}")
+  occurredAt     DateTime @default(now()) @map("occurred_at")
+
+  actorUser    User?         @relation("AuditActor", fields: [actorUserId], references: [id])
+  organization Organization? @relation(fields: [organizationId], references: [id])
+  application  Application?  @relation(fields: [applicationId], references: [id])
+
+  @@index([actorUserId])
+  @@index([organizationId])
+  @@index([eventType])
+  @@index([occurredAt])
+  @@map("audit_events")
+}
+
+// ─── Login Attempts (rate limiting / lockout) ─────────────────────────────────
+
+model LoginAttempt {
+  id          String   @id @default(uuid())
+  identifier  String
+  ipAddress   String   @map("ip_address")
+  success     Boolean
+  occurredAt  DateTime @default(now()) @map("occurred_at")
+
+  @@index([identifier, occurredAt])
+  @@index([ipAddress, occurredAt])
+  @@map("login_attempts")
+}
