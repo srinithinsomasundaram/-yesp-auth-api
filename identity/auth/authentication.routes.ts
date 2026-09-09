@@ -387,21 +387,46 @@ router.post("/auth/logout", async (c) => {
   return c.json({ success: true });
 });
 
-router.post("/auth/logout-all", requireAuth, async (c) => {
-  const user = c.get("user");
+router.post("/auth/logout-all", async (c) => {
+  let userId: string | undefined;
+
+  const authHeader = c.req.header("Authorization");
+  if (authHeader?.startsWith("Bearer ")) {
+    try {
+      const payload = await verifyToken(authHeader.slice(7));
+      userId = payload.sub ?? undefined;
+    } catch { /* expired AT — fall back to RT */ }
+  }
+
+  let bodyToken: string | undefined;
+  try {
+    const body = await c.req.json() as { refreshToken?: string };
+    bodyToken = body?.refreshToken;
+  } catch { /* no body */ }
+
+  const rawRt = bodyToken ?? getCookie(c, "yesp_rt");
+  if (rawRt) {
+    const tokenHash = hashToken(rawRt);
+    const record = await db.refreshToken.findUnique({
+      where: { tokenHash },
+      select: { userId: true },
+    }).catch(() => null);
+    if (record) userId ??= record.userId;
+  }
 
   clearRefreshCookie(c);
 
-  await db.session.updateMany({
-    where: { userId: user.id, revokedAt: null },
-    data: { revokedAt: new Date() },
-  });
-
-  await audit({
-    eventType: "user.logout.all",
-    actorUserId: user.id,
-    ipAddress: c.req.header("x-forwarded-for") ?? undefined,
-  });
+  if (userId) {
+    await db.session.updateMany({
+      where: { userId, revokedAt: null },
+      data: { revokedAt: new Date() },
+    }).catch(() => {});
+    await audit({
+      eventType: "user.logout.all",
+      actorUserId: userId,
+      ipAddress: c.req.header("x-forwarded-for") ?? undefined,
+    }).catch(() => {});
+  }
 
   return c.json({ success: true });
 });
